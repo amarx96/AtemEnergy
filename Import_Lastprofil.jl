@@ -1,4 +1,6 @@
 # Importiere Lastprofil
+using CSV
+using DataFrames    
 # Also, we read our input parameters via csv files
 # CSV einlesen mit korrektem Separator
 lines = readlines("C:\\Users\\alex-\\Desktop\\BatteryStorage\\Optimization\\LG_Strom_ab_2023.csv")
@@ -45,29 +47,20 @@ function to_quarter_index(s::String)
     return Int(Dates.value(dt - reference_dt) ÷ (15 * 60_000))  # 15 minutes in ms
 end
 
-df
 
 # Optional: Convert timestamp back to DateTime
 # 3. Plot the demand time series
 plot(df.Zeit, df.Leistung, xlabel="Zeit", ylabel="Last in MW", title="Lastprofil DX Center", lw=2)
 # Beispiel: Daten vom 28.02.2023 kopieren für den Schalttag
-tag_fuer_feb29 = Date(2023, 2, 28)
+tag_fuer_feb29 = Date(2024, 2, 28)
 df_feb28 = filter(row -> Date(row.Zeit) == tag_fuer_feb29, df)
 
-# 1 Jahr aufschlagen und Jahr aktualisieren
-df_feb29 = deepcopy(df_feb28)
-df_feb29.Zeit .= df_feb29.Zeit .+ Year(1)
-df_feb29.Jahr .= 2024
-
-# An df_2024 anhängen und sortieren
+# An df_2023 anhängen und sortieren
 tag_fuer_feb29 = Date(2023, 2, 28)
 df_feb28  = filter(row -> Date(row.Zeit) == tag_fuer_feb29, df)
-
-# 1 Jahr aufschlagen und Jahr aktualisieren
-df_feb29 = deepcopy(df_feb28)
-df_feb29.Zeit .= df_feb29.Zeit .+ Year(1)
-df_feb29.Jahr .= 2024
 
 # An df_2024 anhängen und sortieren
 append!(df, df_feb29)
 sort!(df, :Zeit)
+
+last_profil = df

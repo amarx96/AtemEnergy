@@ -70,6 +70,5 @@ df_preissetzer.timestamps = DateTime.(df_aep.Datum .* " " .* string.(df_aep.von)
 df_ida_preis.timestamps = DateTime.(df_ida_preis."Datum von" .* " " .* string.(df_ida_preis."(Uhrzeit) von"), dateformat"dd.mm.yyyy HH:MM:SS")
 df_da_preis.timestamps = DateTime.(replace.(first.(split.(String.(df_da_preis.Slot), " - ")), r" \([A-Z]+\)" => ""),     dateformat"dd/MM/yyyy HH:MM:SS")
 df_aep_preis.timestamps = DateTime.(df_ida_preis."Datum von" .* " " .* string.(df_ida_preis."(Uhrzeit) von"), dateformat"dd.mm.yyyy HH:MM:SS")
-df_rebap_ueb_preis
-
-df_da_preis.timestamps = DateTime.(df_ida_preis."Datum von" .* " " .* string.(df_ida_preis."(Uhrzeit) von"), dateformat"dd.mm.yyyy HH:MM:SS")
+df_rebap_ueb_preis.timestamps = DateTime.(df_ida_preis."Datum von" .* " " .* string.(df_ida_preis."(Uhrzeit) von"), dateformat"dd.mm.yyyy HH:MM:SS")
+df_rebap_unter_preis.timestamps = DateTime.(df_ida_preis."Datum von" .* " " .* string.(df_ida_preis."(Uhrzeit) von"), dateformat"dd.mm.yyyy HH:MM:SS")
