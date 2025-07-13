@@ -50,39 +50,45 @@ m = Model(HiGHS.Optimizer)
 @constraint(m, ProductionCost[t in technologies,τ in Timestamps],
     sum(FuelProductionByTechnology[t,f,τ] for f in fuels, τ in Timestamps) * VariableCost[2020,t] + NewCapacity[t] * InvestmentCost[2020,t] == TotalCost[t]
 )
-
+gi
 # for variable renewables, the production needs to be always at maximum
 @constraint(m, ProductionFunction_res[t in technologies, f in fuels,τ in Timestamps;TagDispatchableTechnology[t]==0],
     OutputRatio[t,f] * AccumulatedCapacity[t] * Solar_CF[τ] == FuelProductionByTechnology[t,f,τ]
 )
 
 # define the use by the production
-@constraint(ESM, UseFunction[y in year,r in regions,h in hour,t in technologies, f in fuels],
-    InputRatio[t,f] * sum(FuelProductionByTechnology[y,r,h,t,ff] for ff in fuels) == FuelUseByTechnology[y,r,h,t,f]
+@constraint(m, UseFunction[t in technologies, f in fuels, τ in Timestamps],
+    InputRatio[t,f] * sum(FuelProductionByTechnology[t,ff, τ] for ff in fuels) == FuelUseByTechnology[t,f, τ]
 )
 
 # installed capacity is limited by the maximum capacity
-@constraint(ESM, MaxCapacityFunction[t in technologies, τ in Timestamps],
+@constraint(m, MaxCapacityFunction[t in technologies, τ in Timestamps],
      AccumulatedCapacity[t] <= MaxCapacity[t]
 )
 
 ### Add your storage constraints here
-    @constraint(ESM, StorageChargeFunction[y in year,r in regions,s in storages, h in hour, f in fuels; StorageDischargeEfficiency[s,f]>0], 
-    StorageCharge[y,r,s,h,f] <= AccumulatedStorageEnergyCapacity[y,r,s,f]/E2PRatio[s]
+    @constraint(m, StorageChargeFunction[s in storages, f in fuels, τ in Timestamps; StorageDischargeEfficiency[s,f]>0], 
+    StorageCharge[s,f,τ] <= AccumulatedStorageEnergyCapacity[s,f,τ]/E2PRatio[s]
 )
 
-@constraint(ESM, StorageDischargeFunction[y in year,r in regions,s in storages, h in hour, f in fuels; StorageDischargeEfficiency[s,f]>0], 
-    StorageDischarge[y,r,s,h,f] <= AccumulatedStorageEnergyCapacity[y,r,s,f]/E2PRatio[s]
+@constraint(m, StorageDischargeFunction[s in storages, f in fuels, τ in Timestamps; StorageDischargeEfficiency[s,f]>0], 
+    StorageDischarge[s,f,τ] <= AccumulatedStorageEnergyCapacity[s,f,τ]/E2PRatio[s]
 )
 
-@constraint(ESM, StorageLevelFunction[y in year,r in regions,s in storages, h in hour, f in fuels; h>1 && StorageDischargeEfficiency[s,f]>0], 
-    StorageLevel[y,r,s,h,f] == StorageLevel[y,r,s,h-1,f]*StorageLosses[s,f] + StorageCharge[y,r,s,h,f]*StorageChargeEfficiency[s,f] - StorageDischarge[y,r,s,h,f]/StorageDischargeEfficiency[s,f]
+@constraint(m, StorageLevelFunction[s in storages, f in fuels, τ in Timestamps; τ >= Timestamps[1] && StorageDischargeEfficiency[s,f]>0], 
+    StorageLevel[s,f,τ] == StorageLevel[s,f,τ]*StorageLosses[s,f] + StorageCharge[s,f,τ]*StorageChargeEfficiency[s,f] - StorageDischarge[s,f,τ]/StorageDischargeEfficiency[s,f]
 )
 
-@constraint(ESM, StorageLevelStartFunction[y in year,r in regions,s in storages, h in hour, f in fuels; h==1 && StorageDischargeEfficiency[s,f]>0], 
-    StorageLevel[y,r,s,h,f] == 0.5*AccumulatedStorageEnergyCapacity[y,r,s,f]*StorageLosses[s,f] + StorageCharge[y,r,s,h,f]*StorageChargeEfficiency[s,f] - StorageDischarge[y,r,s,h,f]/StorageDischargeEfficiency[s,f]
+@constraint(m, StorageLevelStartFunction[s in storages, f in fuels, τ in Timestamps; τ==Timestamps[1] && StorageDischargeEfficiency[s,f]>0], 
+    StorageLevel[s,f,τ] == 0.5*AccumulatedStorageEnergyCapacity[s,f,τ]*StorageLosses[s,f] + StorageCharge[s,f,τ]*StorageChargeEfficiency[s,f] - StorageDischarge[s,f,τ]/StorageDischargeEfficiency[s,f]
 )
 
-@constraint(ESM, MaxStorageLevelFunction[y in year,r in regions,s in storages, h in hour, f in fuels; StorageDischargeEfficiency[s,f]>0], 
-    StorageLevel[y,r,s,h,f] <= AccumulatedStorageEnergyCapacity[y,r,s,f]
+@constraint(m, MaxStorageLevelFunction[s in storages, f in fuels, τ in Timestamps; StorageDischargeEfficiency[s,f]>0], 
+    StorageLevel[s,f,τ] <= AccumulatedStorageEnergyCapacity[s,f,τ]
 )
+
+
+############ Total Installed capacity 
+# calculate the total installed capacity in each year
+@constraint(m, CapacityAccountingFunction[t in technologies],
+    NewCapacity[t] == AccumulatedCapacity[t])
