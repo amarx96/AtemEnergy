@@ -63,4 +63,7 @@ df_feb28  = filter(row -> Date(row.Zeit) == tag_fuer_feb29, df)
 append!(df, df_feb29)
 sort!(df, :Zeit)
 
-last_profil = df
+# define the use by the production
+@constraint(ESM, UseFunction[y in year,r in regions,h in hour,t in technologies, f in fuels],
+    InputRatio[t,f] * sum(FuelProductionByTechnology[y,r,h,t,ff] for ff in fuels) == FuelUseByTechnology[y,r,h,t,f]
+)

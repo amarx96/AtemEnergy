@@ -1,18 +1,63 @@
 # Main Battery Optimizer
-using JuMP # building models
-using DataStructures # using dictionaries with a default value
-using HiGHS # solver for the JuMP model
-using CSV # readin of CSV files
-using DataFrames # data tables
-using Statistics # mean function
-using Plots  # generate graphs
-using Plots.Measures
-using StatsPlots # additional features for plots
+
 
 ### Import dependencies
+include(joinpath(@__DIR__, "install_and_import.jl")) # Install and import required packages
 include(joinpath(@__DIR__, "Import_Energy_Data.jl")) # colors for the plots
 include(joinpath(@__DIR__, "Import_CapacityFactor.jl"))
 include(joinpath(@__DIR__, "Import_PriceData.jl"))
 include(joinpath(@__DIR__, "Import_Lastprofil.jl"))
 
 ### Object Funciton
+m = Model(HiGHS.Optimizer)
+
+# === parameters ===
+Timestamps = df_solar_cf.Timestamp
+technologies = ["SolarPV"]
+storages = ["Battery"]
+fuels = ["Power"]
+
+η_charge = 0.95  # Efficiency of charging
+η_discharge = 0.95  # Efficiency of discharging
+
+
+### building the model ###
+# instantiate a model with an optimizer
+m = Model(HiGHS.Optimizer)
+
+# PV Data
+@variable(m, TotalCost[technologies] >= 0)
+@variable(m, FuelProductionByTechnology[technologies, fuels, Timestamps] >= 0)
+@variable(m, NewCapacity[technologies] >=0)
+@variable(m, AccumulatedCapacity[technologies] >=0)
+@variable(m, FuelUseByTechnology[technologies, fuels,Timestamps] >=0)
+@variable(m, Curtailment[fuels,Timestamps] >=0)
+
+### And we also need to add our new variables for storages
+@variable(m, NewStorageEnergyCapacity[s=storages,f=fuels, Timestamps; StorageDischargeEfficiency[s,f]>0]>=0)
+@variable(m, AccumulatedStorageEnergyCapacity[s=storages,f=fuels,Timestamps; StorageDischargeEfficiency[s,f]>0]>=0)
+@variable(m, StorageCharge[s=storages, f=fuels,Timestamps; StorageDischargeEfficiency[s,f]>0]>=0)
+@variable(m, StorageDischarge[s=storages, f=fuels,Timestamps; StorageDischargeEfficiency[s,f]>0]>=0)
+@variable(m, StorageLevel[s=storages, f=fuels,Timestamps; StorageDischargeEfficiency[s,f]>0]>=0)
+@variable(m, TotalStorageCost[storages,Timestamps] >= 0)
+
+
+# calculate the total cost
+@constraint(m, ProductionCost[t in technologies,τ in Timestamps],
+    sum(FuelProductionByTechnology[t,f,τ] for f in fuels, τ in Timestamps) * VariableCost[2020,t] + NewCapacity[t] * InvestmentCost[2020,t] == TotalCost[t]
+)
+
+# for variable renewables, the production needs to be always at maximum
+@constraint(m, ProductionFunction_res[t in technologies, f in fuels,τ in Timestamps;TagDispatchableTechnology[t]==0],
+    OutputRatio[t,f] * AccumulatedCapacity[t] * Solar_CF[τ] == FuelProductionByTechnology[t,f,τ]
+)
+
+# define the use by the production
+@constraint(ESM, UseFunction[y in year,r in regions,h in hour,t in technologies, f in fuels],
+    InputRatio[t,f] * sum(FuelProductionByTechnology[y,r,h,t,ff] for ff in fuels) == FuelUseByTechnology[y,r,h,t,f]
+)
+
+# define the emissions
+@constraint(ESM, TechnologyEmissionFunction[y in year,r in regions,t in technologies],
+    sum(FuelProductionByTechnology[y,r,h,t,f] for f in fuels, h in hour) * EmissionRatio[t] == AnnualTechnologyEmissions[y,r,t]
+)

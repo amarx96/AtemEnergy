@@ -45,4 +45,4 @@ df_interp = DataFrame(
     CapacityFactor = cf_15min
 )
 
-df_interp
+Solar_CF = Dict(row.Timestamp => row.CapacityFactor for row in eachrow(df_interp))
