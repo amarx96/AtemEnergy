@@ -14,3 +14,5 @@ include(joinpath(@__DIR__, "Import_Energy_Data.jl")) # colors for the plots
 include(joinpath(@__DIR__, "Import_CapacityFactor.jl"))
 include(joinpath(@__DIR__, "Import_PriceData.jl"))
 include(joinpath(@__DIR__, "Import_Lastprofil.jl"))
+
+### Object Funciton

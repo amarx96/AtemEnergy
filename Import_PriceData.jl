@@ -31,7 +31,7 @@ prices_da = DataFrame(XLSX.readtable(xlsx_path, "1")...)
 
 # Beispiel: Daten vom 28.02.2023 kopieren für den Schalttag
 tag_fuer_feb29 = Date(2023, 2, 28)
-df_feb28 = filter(row -> Date(row.Zeit) == tag_fuer_feb29, df_2023)
+df_feb28 = filter(row -> Date(row.Zeit) == tag_fuer_feb29, df)
 
 # 1 Jahr aufschlagen und Jahr aktualisieren
 df_feb29 = deepcopy(df_feb28)
@@ -60,10 +60,11 @@ df_aep.timestamps = DateTime.(df_aep.Datum .* " " .* string.(df_aep.von), datefo
 df_rebap_ueb.timestamps = DateTime.(df_aep.Datum .* " " .* string.(df_aep.von), dateformat"dd.mm.yyyy HH:MM:SS")
 df_rebap_unter.timestamps = DateTime.(df_aep.Datum .* " " .* string.(df_aep.von), dateformat"dd.mm.yyyy HH:MM:SS")
 df_aep_schaetzer.timestamps = DateTime.(df_aep.Datum .* " " .* string.(df_aep.von), dateformat"dd.mm.yyyy HH:MM:SS")
-df_afrr.timestamps = DateTime.(df_aep.Datum .* " " .* string.(df_aep.von), dateformat"dd.mm.yyyy HH:MM:SS")
-df_mfrr.timestamps = DateTime.(df_aep.Datum .* " " .* string.(df_aep.von), dateformat"dd.mm.yyyy HH:MM:SS")
-df_aep.timestamps = DateTime.(df_aep.Datum .* " " .* string.(df_aep.von), dateformat"dd.mm.yyyy HH:MM:SS")
-df_prl.timestamps = DateTime.(df_aep.Datum .* " " .* string.(df_aep.von), dateformat"dd.mm.yyyy HH:MM:SS")
+
+df_afrr.timestamps = DateTime.(df_afrr.Datum .* " " .* string.(df_afrr.von), dateformat"dd.mm.yyyy HH:MM:SS")
+
+df_mfrr.timestamps = DateTime.(df_mfrr.Datum .* " " .* string.(df_mfrr.von), dateformat"dd.mm.yyyy HH:MM:SS")
+df_prl.timestamps = DateTime.(df_prl.Datum .* " " .* string.(df_prl.von), dateformat"dd.mm.yyyy HH:MM:SS")
 df_preissetzer.timestamps = DateTime.(df_aep.Datum .* " " .* string.(df_aep.von), dateformat"dd.mm.yyyy HH:MM:SS")
 
 # Creating CET Time Stamps for Pricing Data
