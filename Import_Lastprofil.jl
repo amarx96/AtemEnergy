@@ -62,15 +62,8 @@ plot(df.Zeit, df.Leistung, xlabel="Zeit", ylabel="Last in MW", title="Lastprofil
 tag_fuer_feb29 = Date(2024, 2, 28)
 df_feb28 = filter(row -> Date(row.Zeit) == tag_fuer_feb29, df)
 
-# An df_2023 anhängen und sortieren
-tag_fuer_feb29 = Date(2023, 2, 28)
-df_feb28  = filter(row -> Date(row.Zeit) == tag_fuer_feb29, df)
-
 # An df_2024 anhängen und sortieren
 append!(df, df_feb29)
-df.Zeit = [DateTime(2024, month(z), day(z), hour(z), minute(z)) for z in df.Zeit]
-df.Jahr .= 2024
-
 sort!(df, :Zeit)
 
 
