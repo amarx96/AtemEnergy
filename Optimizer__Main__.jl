@@ -15,7 +15,8 @@ include(joinpath(@__DIR__, "helper_functions.jl")) # helper functions
 m = Model(HiGHS.Optimizer)
 
 # === parameters ===
-Timestamps = df_solar_cf.Timestamp
+# Extract keys and values into vectors
+Timestamps = collect(keys(Solar_CF))
 technologies = ["SolarPV"]
 storages = ["Battery"]
 fuels = ["Power"]
@@ -47,6 +48,10 @@ m = Model(HiGHS.Optimizer)
 @variable(m, StorageLevel[s=storages, f=fuels,Timestamps; StorageDischargeEfficiency[s,f]>0]>=0)
 @variable(m, TotalStorageCost[storages,Timestamps] >= 0)
 
+# Add Market variables
+@variable(m, qPurchased[fuels, Timestamps] >= 0)
+
+
 # ================================ #
 ### Implement Objective Function ###
 # ================================ #
@@ -55,11 +60,11 @@ m = Model(HiGHS.Optimizer)
     sum(TotalStorageCost[s,τ] for s in storages, τ in Timestamps)
 )
 
-
-
-
-### Demand Constraints ###
-
+### Demand Constraints: Grid
+@constraint(m, DemandFunction[t in technologies, f in fuels, τ in Timestamps],
+    FuelProductionByTechnology[t,f,τ] + sum(StorageCharge[s,f,τ] for s in storages) + Curtailment[f,τ] + Purchased[f,τ] 
+    == FuelUseByTechnology[t,f,τ] + sum(StorageCharge[s,f,τ] for s in storages) + LoadProfile[f,τ]
+)
 
 
 

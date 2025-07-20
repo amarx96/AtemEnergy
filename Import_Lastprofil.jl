@@ -26,6 +26,13 @@ df.Jahr = year.(df.Zeit)
 # Entferne die erste Zeile, da sie leer ist
 df = df[df.Jahr .== 2023, :]
 
+# Step 1: Turn Zeit into String and replace year
+zeit_str = string.(df.Zeit)
+zeit_str_replaced = replace.(zeit_str, "2023" => "2024")
+
+# Step 2: Convert back to DateTime
+df.Zeit = DateTime.(zeit_str_replaced)
+
 
 df_Summary = combine(groupby(df, :Jahr),
     :Leistung => sum => :Summe_kW,
@@ -61,4 +68,15 @@ df_feb28  = filter(row -> Date(row.Zeit) == tag_fuer_feb29, df)
 
 # An df_2024 anhängen und sortieren
 append!(df, df_feb29)
+df.Zeit = [DateTime(2024, month(z), day(z), hour(z), minute(z)) for z in df.Zeit]
+df.Jahr .= 2024
+
 sort!(df, :Zeit)
+
+
+
+# Build the dictionary with keys as (fuel, timestamp) tuples
+LoadProfile = Dict(("Power", row.Zeit) => row.Leistung for row in eachrow(df))
+
+
+
