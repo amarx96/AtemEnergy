@@ -10,7 +10,9 @@ required_packages = [
     "Statistics",  # This is part of Julia's standard library and doesn't need installation
     "Plots",
     "StatsPlots",
-    "Dates"
+    "Dates",
+    "CairoMakie",
+    "StatsBase"
 ]
 
 # Install missing packages
@@ -33,3 +35,5 @@ using Plots
 using Plots.Measures
 using StatsPlots
 using Dates
+using CairoMakie
+using StatsBase

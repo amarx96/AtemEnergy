@@ -19,8 +19,10 @@ DayAheadPrices_Seq2 = Dict(row.timestamps => parse(Float64, row.Seq2) for row in
 m = Model(HiGHS.Optimizer)
 
 # === parameters ===
-# Extract keys and values into vectors
-Timestamps = collect(keys(Solar_CF))
+# Extract and sort the timestamps
+Timestamps_unsorted = collect(keys(Solar_CF))
+Timestamps = sort(Timestamps_unsorted)
+
 technologies = ["SolarPV"]
 storages = ["Battery"]
 fuels = ["Power"]
@@ -61,30 +63,45 @@ m = Model(HiGHS.Optimizer)
 @variable(m, PurchasedDayAhead_Seq2[Timestamps] >= 0)
 @variable(m, PurchasingCost[Timestamps] >= 0)
 
+
+# Selling Variables
+@variable(m, SellingDayAhead_Seq1[Timestamps] >= 0)
+@variable(m, SellingDayAhead_Seq2[Timestamps] >= 0)
+@variable(m, ProfitDayAhead[Timestamps] >= 0)
+
 # ================================ #
 ### Implement Objective Function ###
 # ================================ #
-@objective(m, Min, 
-    sum(TotalPVCost[t] for t in technologies) + 
-    sum(TotalStorageCost[s] for s in storages, τ in Timestamps) +
-    sum(PurchasingCost[τ] for τ in Timestamps)
+@objective(m, Max, 
+    sum(ProfitDayAhead[τ] for τ in Timestamps)  # Profits from Trading
+    - sum(TotalPVCost[t] for t in technologies) + 
+    - sum(TotalStorageCost[s] for s in storages)
+    - sum(PurchasingCost[τ] for τ in Timestamps)
 )
 
 ### Cost accounting
 # PV Cost Function
-@constraint(m, ProductionCost[t in technologies,τ in Timestamps],
-    sum(FuelProductionByTechnology[t,f,τ] for f in fuels, τ in Timestamps) * VariableCost[2020,t] + NewCapacity[t] * InvestmentCost[2020,t] == TotalPVCost[t]
+@constraint(m, ProductionCostFunction[t in technologies,τ in Timestamps],
+    sum(FuelProductionByTechnology[t,f,τ] for f in fuels) * VariableCost[2020,t] * 1000 + InvestmentCost[2020,t]/ 15 * NewCapacity[t] == TotalPVCost[t] # Ignoring investment Cost for now
 )
 
-# Battery Cost Function
+# Battery Cost, 300 EUR per kWh with 15 years of lifetime
 @constraint(m, StorageCostFunction[s in storages], 
-    TotalStorageCost[s] == sum(NewStorageEnergyCapacity[s,f]*InvestmentCostStorage[2020,s] for f in fuels if StorageDischargeEfficiency[(s,f)]>0)
+    TotalStorageCost[s] == sum(NewStorageEnergyCapacity[s,f] * 300/15 for f in fuels if StorageDischargeEfficiency[(s,f)]>0)
 )
 
 # Day-Ahead Market Cost Function
 @constraint(m, PurchasingCostFunction[τ in Timestamps],
-    PurchasingCost[τ] == PurchasedDayAhead_Seq1[τ] * DayAheadPrices_Seq1[τ] + 
-                        PurchasedDayAhead_Seq2[τ] * DayAheadPrices_Seq2[τ]
+    PurchasingCost[τ] == PurchasedDayAhead_Seq1[τ] * DayAheadPrices_Seq1[τ] / 1000 # Converting EUR/MWh to EUR/kWh
+                        + PurchasedDayAhead_Seq2[τ] * DayAheadPrices_Seq2[τ] / 1000 # Converting EUR/MWh to EUR/kWh
+                        + (PurchasedDayAhead_Seq1[τ] + PurchasedDayAhead_Seq2[τ]) * 0.15 # Grid Fees in EUR/kWh
+)
+
+
+# Day-Ahead Market Cost Function
+@constraint(m, SalesFunction[τ in Timestamps],
+    ProfitDayAhead[τ] == SellingDayAhead_Seq1[τ] * DayAheadPrices_Seq1[τ] / 1000 # Converting EUR/MWh to EUR/kWh
+                        + SellingDayAhead_Seq2[τ] * DayAheadPrices_Seq2[τ] / 1000 # Converting EUR/MWh to EUR/kWh
 )
 
 
@@ -92,13 +109,20 @@ m = Model(HiGHS.Optimizer)
 ### Technical Constraints        ###
 # ================================ #
 @constraint(m, PurchasingFunction[τ in Timestamps],
-    Purchased[τ] == PurchasedDayAhead_Seq1[τ] + PurchasedDayAhead_Seq1[τ]
+    Purchased[τ] == PurchasedDayAhead_Seq1[τ] + PurchasedDayAhead_Seq2[τ]
 )
 
-### Demand Constraints: Grid
-@constraint(m, DemandFunction[t in technologies, f in fuels, τ in Timestamps],
-    FuelProductionByTechnology[t,f,τ] + sum(StorageDischarge[s,f,τ] for s in storages) + Purchased[τ] 
-    == FuelUseByTechnology[t,f,τ] + sum(StorageCharge[s,f,τ] for s in storages) + Curtailment[f,τ]  +LoadProfile[f,τ]
+### Energy Balance Constraints ###
+@constraint(m, EnergyBalanceFunction[f in fuels, τ in Timestamps],
+    sum(FuelProductionByTechnology[t,f,τ] for t in technologies) + StorageDischarge["Battery",f,τ]  + Purchased[τ]     # Production
+    == StorageCharge["Battery",f,τ] + LoadProfile[f,τ] + Curtailment[f,τ] # Demand
+    +  SellingDayAhead_Seq1[τ] + SellingDayAhead_Seq2[τ]                   # IDA
+)
+
+@constraint(m, MaxSales[τ in Timestamps],
+    SellingDayAhead_Seq1[τ] + SellingDayAhead_Seq2[τ] <=
+    sum(FuelProductionByTechnology[t,f,τ] for t in technologies, f in fuels) +
+    sum(StorageDischarge[s,f,τ] for s in storages, f in fuels)
 )
 
 
@@ -113,9 +137,9 @@ m = Model(HiGHS.Optimizer)
     InputRatio[t,f] * sum(FuelProductionByTechnology[t,ff, τ] for ff in fuels) == FuelUseByTechnology[t,f, τ]
 )
 
-# installed capacity is limited by the maximum capacity
-@constraint(m, MaxCapacityFunction[t in technologies, τ in Timestamps],
-     AccumulatedCapacity[t] <= MaxCapacity[t]
+
+@constraint(m, MaxCapacityConstraint[t in technologies, f in fuels, τ in Timestamps],
+        AccumulatedCapacity[t] <= 5000 # Maximum Solar Capacity below 5 MW
 )
 
 ### Implement Battery Constraints ###
@@ -143,7 +167,7 @@ for s in storages, f in fuels
 end
 
 @constraint(m, StorageLevelStartFunction[s in storages, f in fuels, τ in Timestamps; τ==Timestamps[1] && StorageDischargeEfficiency[s,f]>0], 
-    StorageLevel[s,f,τ] == 0.5*AccumulatedStorageEnergyCapacity[s,f,τ]*StorageLosses[s,f] + StorageCharge[s,f,τ]*StorageChargeEfficiency[s,f] - StorageDischarge[s,f,τ]/StorageDischargeEfficiency[s,f]
+    StorageLevel[s,f,τ] >= 0.4*AccumulatedStorageEnergyCapacity[s,f,τ]*StorageLosses[s,f] + StorageCharge[s,f,τ]*StorageChargeEfficiency[s,f] - StorageDischarge[s,f,τ]/StorageDischargeEfficiency[s,f]
 )
 
 @constraint(m, MaxStorageLevelFunction[s in storages, f in fuels, τ in Timestamps; StorageDischargeEfficiency[s,f]>0], 
@@ -157,7 +181,7 @@ end
 
 # account for currently installed storage capacities
 @constraint(m, StorageCapacityAccountingFunction[s in storages, f in fuels, τ in Timestamps; StorageDischargeEfficiency[s,f]>0],
-    NewStorageEnergyCapacity[s,f] == AccumulatedStorageEnergyCapacity[s,f,τ]
+    AccumulatedStorageEnergyCapacity[s,f,τ] <= NewStorageEnergyCapacity[s,f]
 )
 
 
@@ -173,37 +197,51 @@ s = "Battery"
 
 
 ### Plotting
-# Get time series data
-fuel_production   = [value(FuelProductionByTechnology[t,f,τ]) for τ in Timestamps]
-storage_discharge = [value(StorageDischarge[s,f,τ]) for τ in Timestamps]
-purchased         = [value(Purchased[τ]) for τ in Timestamps]
 
-# Area chart stack: Fuel supply sources
-plot(
-    Timestamps, 
-    [fuel_production storage_discharge purchased],
-    label=["Fuel Production" "Discharge" "Purchased"],
-    seriestype=:area,
-    fillalpha=0.5,
-    lw=0.5,
-    xlabel="Time", ylabel="MW",
-    title="Supply Components (Area)",
-    legend=:topright,
-    size=(1000, 400)
-)
 
-# Calculate total demand
-fuel_use       = [value(FuelUseByTechnology[t,f,τ]) for τ in Timestamps]  # Optional
-storage_charge = [value(StorageCharge[s,f,τ]) for τ in Timestamps]
-load           = [LoadProfile[(f,τ)] for τ in Timestamps]
-total_demand   = storage_charge .+ load  # You can also include fuel_use if relevant
+# Convert DateTime to Float64 for plotting
+t0 = minimum(Timestamps)
+ts_float = Dates.value.(Timestamps) .- Dates.value(t0)  # elapsed nanoseconds
+ts_float = ts_float ./ 1e9  # convert to seconds for easier interpretation
 
-# Overlay total demand as line
-plot!(
-    Timestamps,
-    total_demand,
-    label="Total Demand (Charge + Load)",
-    lw=2,
-    linecolor=:black,
-    seriestype=:line
-)
+# Define tick formatter to show time labels
+tick_labels = Timestamps[1:round(Int, length(Timestamps) / 10):end]
+tick_positions = Dates.value.(tick_labels) .- Dates.value(t0)
+tick_positions = tick_positions ./ 1e9
+
+# Data
+fp  = [value(FuelProductionByTechnology["SolarPV", "Power", τ]) for τ in Timestamps]
+sd  = [value(StorageDischarge["Battery", "Power", τ]) for τ in Timestamps]
+pur = [value(Purchased[τ]) for τ in Timestamps]
+sc  = [value(StorageCharge["Battery", "Power", τ]) for τ in Timestamps]
+load = [LoadProfile[("Power", τ)] for τ in Timestamps]
+demand = sc .+ load
+
+# Sorrt x axis for consistent plotting
+sortperm_ts = sortperm(Timestamps)
+Timestamps_sorted = Timestamps[sortperm_ts]
+ts_float_sorted = ts_float[sortperm_ts]
+
+# Downsample ticks for better readability
+tick_stride = max(1, Int(length(Timestamps_sorted) ÷ 10))
+tick_indices = 1:tick_stride:length(Timestamps_sorted)
+tick_positions = ts_float_sorted[tick_indices]
+tick_labels = string.(Timestamps_sorted[tick_indices])
+
+using StatsBase
+smoothed_fp = [mean(fp[max(1, i-2):min(end, i+2)]) for i in 1:length(fp)]
+# Do the same for `sd`, `pur`, etc.
+
+# Plot
+fig = Figure(size = (1000, 400))
+ax = Axis(fig[1, 1], title = "Supply and Demand", xlabel = "Time", ylabel = "MW")
+
+band!(ax, ts_float_sorted, zeros(length(ts_float_sorted)), fp[sortperm_ts], color = (:cornflowerblue, 0.3), label = "Fuel Production")
+band!(ax, ts_float_sorted, zeros(length(ts_float_sorted)), sd[sortperm_ts], color = (:orange, 0.3), label = "Discharge")
+band!(ax, ts_float_sorted, zeros(length(ts_float_sorted)), pur[sortperm_ts], color = (:green, 0.3), label = "Purchased")
+
+lines!(ax, ts_float_sorted, load[sortperm_ts], color = :black, linewidth = 2, label = "Total Demand")
+
+ax.xticks = (tick_positions, tick_labels)
+axislegend(ax, position = :rb)
+fig
