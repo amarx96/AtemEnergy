@@ -9,7 +9,8 @@ required_packages = [
     "DataFrames",
     "Statistics",  # This is part of Julia's standard library and doesn't need installation
     "Plots",
-    "StatsPlots"
+    "StatsPlots",
+    "Dates"
 ]
 
 # Install missing packages
@@ -31,3 +32,4 @@ using Statistics
 using Plots
 using Plots.Measures
 using StatsPlots
+using Dates

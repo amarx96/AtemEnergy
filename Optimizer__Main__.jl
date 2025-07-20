@@ -1,5 +1,5 @@
 # Main Battery Optimizer
-
+data_dir = joinpath(@__DIR__)
 
 ### Import dependencies
 include(joinpath(@__DIR__, "install_and_import.jl")) # Install and import required packages
@@ -7,6 +7,9 @@ include(joinpath(@__DIR__, "Import_Energy_Data.jl")) # colors for the plots
 include(joinpath(@__DIR__, "Import_CapacityFactor.jl"))
 include(joinpath(@__DIR__, "Import_PriceData.jl"))
 include(joinpath(@__DIR__, "Import_Lastprofil.jl"))
+include(joinpath(@__DIR__, "colors.jl")) # colors for the plots
+include(joinpath(@__DIR__, "helper_functions.jl")) # helper functions
+
 
 ### Object Funciton
 m = Model(HiGHS.Optimizer)
@@ -43,6 +46,28 @@ m = Model(HiGHS.Optimizer)
 @variable(m, StorageDischarge[s=storages, f=fuels,Timestamps; StorageDischargeEfficiency[s,f]>0]>=0)
 @variable(m, StorageLevel[s=storages, f=fuels,Timestamps; StorageDischargeEfficiency[s,f]>0]>=0)
 @variable(m, TotalStorageCost[storages,Timestamps] >= 0)
+
+# ================================ #
+### Implement Objective Function ###
+# ================================ #
+@objective(m, Max, 
+    sum(TotalCost[t] for t in technologies) + 
+    sum(TotalStorageCost[s,τ] for s in storages, τ in Timestamps)
+)
+
+
+
+
+### Demand Constraints ###
+
+
+
+
+
+
+
+
+
 
 
 ### Implement Constraints ###
@@ -92,3 +117,9 @@ gi
 # calculate the total installed capacity in each year
 @constraint(m, CapacityAccountingFunction[t in technologies],
     NewCapacity[t] == AccumulatedCapacity[t])
+
+# account for currently installed storage capacities
+@constraint(m, StorageCapacityAccountingFunction[s in storages, f in fuels, τ in Timestamps; StorageDischargeEfficiency[s,f]>0],
+    NewStorageEnergyCapacity[s,f,τ] == AccumulatedStorageEnergyCapacity[s,f,τ]
+)
+
