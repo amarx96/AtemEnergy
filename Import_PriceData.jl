@@ -22,36 +22,6 @@ df_mfrr           = CSV.read(joinpath(pfad, "mFRR_Nachfrage.csv"), DataFrame,   
 df_prl            = CSV.read(joinpath(pfad, "PRL_Nachfrage.csv"), DataFrame,delim=";")
 df_preissetzer    = CSV.read(joinpath(pfad, "Preissetzendes_AEP_Modul.csv"), DataFrame,delim=";")
 
-# Importiere Lastprofil
-# Load Excel file and sheet named "1"
-xlsx_path = "C:/Users/alex-/Desktop/BatteryStorage/Optimization/strompreise/DayAhead_Prices.xlsx"
-sheet = XLSX.readtable(xlsx_path, "1")
-prices_da = DataFrame(XLSX.readtable(xlsx_path, "1")...)
-
-# Beispiel: Daten vom 28.02.2023 kopieren für den Schalttag
-tag_fuer_feb29 = Date(2023, 2, 28)
-df_feb28 = filter(row -> Date(row.Zeit) == tag_fuer_feb29, df)
-
-# 1 Jahr aufschlagen und Jahr aktualisieren
-df_feb29 = deepcopy(df_feb28)
-df_feb29.Zeit .= df_feb29.Zeit .+ Year(1)
-df_feb29.Jahr .= 2024
-
-# An df_2024 anhängen und sortieren
-tag_fuer_feb29 = Date(2023, 2, 28)
-df_feb28  = filter(row -> Date(row.Zeit) == tag_fuer_feb29, df)
-
-# 1 Jahr aufschlagen und Jahr aktualisieren
-df_feb29 = deepcopy(df_feb28)
-df_feb29.Zeit .= df_feb29.Zeit .+ Year(1)
-df_feb29.Jahr .= 2024
-
-# An df_2024 anhängen und sortieren
-append!(df, df_feb29)
-sort!(df, :Zeit)
-
-# Länge der Zeitreihe
-n_qh = nrow(df_aep_preis)  # = 35136 bei Schaltjahr
 
 
 # Creating CET Time Stamps for Quantitiy Data

@@ -25,8 +25,8 @@ technologies = ["SolarPV"]
 storages = ["Battery"]
 fuels = ["Power"]
 
-# And a Dict of maximum capacities in MW
-MaxCapacity = Dict("SolarPV" => 5.0, "Battery" => 5.0)
+# And a Dict of maximum capacities in kW
+MaxCapacity = Dict("SolarPV" => 3000, "Battery" => 5000)
 
 η_charge = 0.95  # Efficiency of charging
 η_discharge = 0.95  # Efficiency of discharging
@@ -60,25 +60,35 @@ m = Model(HiGHS.Optimizer)
 @variable(m, PurchasedDayAhead_Seq1[Timestamps] >= 0)
 @variable(m, PurchasedDayAhead_Seq2[Timestamps] >= 0)
 @variable(m, PurchasingCost[Timestamps] >= 0)
+@variable(m, TotalPowerSold[Timestamps] >= 0)
+
+# Selling Variables
+@variable(m, SellingDayAhead_Seq1[Timestamps] >= 0)
+@variable(m, SellingDayAhead_Seq2[Timestamps] >= 0)
+@variable(m, ProfitDayAhead[Timestamps] >= 0)
 
 # ================================ #
 ### Implement Objective Function ###
 # ================================ #
-@objective(m, Min, 
-    sum(TotalPVCost[t] for t in technologies) + 
-    sum(TotalStorageCost[s] for s in storages, τ in Timestamps) +
-    sum(PurchasingCost[τ] for τ in Timestamps)
+# ================================ #
+### Implement Objective Function ###
+# ================================ #
+@objective(m, Max, 
+    sum(ProfitDayAhead[τ] for τ in Timestamps)  # Profits from Trading
+    - sum(TotalPVCost[t] for t in technologies) + 
+    - sum(TotalStorageCost[s] for s in storages)
+    - sum(PurchasingCost[τ] for τ in Timestamps)
 )
 
 ### Cost accounting
 # PV Cost Function
-@constraint(m, ProductionCost[t in technologies,τ in Timestamps],
-    sum(FuelProductionByTechnology[t,f,τ] for f in fuels, τ in Timestamps) * VariableCost[2020,t] + NewCapacity[t] * InvestmentCost[2020,t] == TotalPVCost[t]
+@constraint(m, ProductionCostFunction[t in technologies,τ in Timestamps],
+    sum(FuelProductionByTechnology[t,f,τ] for f in fuels) * VariableCost[2020,t] * 1000 + InvestmentCost[2020,t]/ 15 * NewCapacity[t] == TotalPVCost[t] # Ignoring investment Cost for now
 )
 
-# Battery Cost Function
+# Battery Cost, 300 EUR per kWh with 15 years of lifetime
 @constraint(m, StorageCostFunction[s in storages], 
-    TotalStorageCost[s] == sum(NewStorageEnergyCapacity[s,f]*InvestmentCostStorage[2020,s] for f in fuels if StorageDischargeEfficiency[(s,f)]>0)
+    TotalStorageCost[s] == sum(NewStorageEnergyCapacity[s,f] * 300/15 for f in fuels if StorageDischargeEfficiency[(s,f)]>0)
 )
 
 # Day-Ahead Market Cost Function
@@ -86,6 +96,16 @@ m = Model(HiGHS.Optimizer)
     PurchasingCost[τ] == PurchasedDayAhead_Seq1[τ] * DayAheadPrices_Seq1[τ] + 
                         PurchasedDayAhead_Seq2[τ] * DayAheadPrices_Seq2[τ]
 )
+
+# Day-Ahead Market Cost Function
+@constraint(m, SalesFunction[τ in Timestamps],
+    ProfitDayAhead[τ] == SellingDayAhead_Seq1[τ] * DayAheadPrices_Seq1[τ] / 1000 # Converting EUR/MWh to EUR/kWh
+                        + SellingDayAhead_Seq2[τ] * DayAheadPrices_Seq2[τ] / 1000 # Converting EUR/MWh to EUR/kWh
+)
+
+# Sum Quantities Sold:
+@constraint(m, TotalQuantitiesSold[τ in Timestamps],
+    TotalPowerSold[τ]== SellingDayAhead_Seq1[τ] + SellingDayAhead_Seq2[τ])
 
 
 # ================================ #
@@ -95,12 +115,18 @@ m = Model(HiGHS.Optimizer)
     Purchased[τ] == PurchasedDayAhead_Seq1[τ] + PurchasedDayAhead_Seq1[τ]
 )
 
-### Demand Constraints: Grid
-@constraint(m, DemandFunction[t in technologies, f in fuels, τ in Timestamps],
-    FuelProductionByTechnology[t,f,τ] + sum(StorageDischarge[s,f,τ] for s in storages) + Purchased[τ] 
-    == FuelUseByTechnology[t,f,τ] + sum(StorageCharge[s,f,τ] for s in storages) + Curtailment[f,τ]  +LoadProfile[f,τ]
+### Energy Balance Constraints ###
+@constraint(m, EnergyBalanceFunction[f in fuels, τ in Timestamps],
+    sum(FuelProductionByTechnology[t,f,τ] for t in technologies) + StorageDischarge["Battery",f,τ]  + Purchased[τ]     # Production
+    == StorageCharge["Battery",f,τ] + LoadProfile[f,τ] + Curtailment[f,τ] # Demand
+    +  SellingDayAhead_Seq1[τ] + SellingDayAhead_Seq2[τ]                   # IDA
 )
 
+@constraint(m, MaxSales[τ in Timestamps],
+    SellingDayAhead_Seq1[τ] + SellingDayAhead_Seq2[τ] <=
+    sum(FuelProductionByTechnology[t,f,τ] for t in technologies, f in fuels) +
+    sum(StorageDischarge[s,f,τ] for s in storages, f in fuels)
+)
 
 ### Implement PV Constraints ###
 # for variable renewables, the production needs to be always at maximum
@@ -178,32 +204,151 @@ fuel_production   = [value(FuelProductionByTechnology[t,f,τ]) for τ in Timesta
 storage_discharge = [value(StorageDischarge[s,f,τ]) for τ in Timestamps]
 purchased         = [value(Purchased[τ]) for τ in Timestamps]
 
-# Area chart stack: Fuel supply sources
-plot(
-    Timestamps, 
-    [fuel_production storage_discharge purchased],
-    label=["Fuel Production" "Discharge" "Purchased"],
-    seriestype=:area,
-    fillalpha=0.5,
-    lw=0.5,
-    xlabel="Time", ylabel="MW",
-    title="Supply Components (Area)",
-    legend=:topright,
-    size=(1000, 400)
-)
-
 # Calculate total demand
 fuel_use       = [value(FuelUseByTechnology[t,f,τ]) for τ in Timestamps]  # Optional
 storage_charge = [value(StorageCharge[s,f,τ]) for τ in Timestamps]
 load           = [LoadProfile[(f,τ)] for τ in Timestamps]
 total_demand   = storage_charge .+ load  # You can also include fuel_use if relevant
 
-# Overlay total demand as line
-plot!(
-    Timestamps,
-    total_demand,
-    label="Total Demand (Charge + Load)",
-    lw=2,
-    linecolor=:black,
-    seriestype=:line
+import Pkg
+Pkg.add("StatsPlots")  # Only once
+plotlyjs()  # switch backend to PlotlyJS
+using StatsPlots
+plotlyjs()  # or pyplot()
+
+# --- your time series data ---
+# fuel_production, storage_discharge, purchased = vectors of length Timestamps
+# total_demand = load + storage_charge
+
+supply_sources = hcat(fuel_production, storage_discharge, purchased)  # shape: T × 3
+
+using Plots
+gr()
+
+# Construct manual stacked areas:
+s1 = fuel_production
+s2 = s1 .+ storage_discharge
+s3 = s2 .+ purchased
+
+# Create a sorted index 
+sorted_idx = sortperm(Timestamps)
+
+# Sort all time series by the same index
+sorted_timestamps      = Timestamps[sorted_idx]
+sorted_fp              = fuel_production[sorted_idx]
+sorted_sd              = storage_discharge[sorted_idx]
+sorted_pp              = purchased[sorted_idx]
+sorted_total_demand    = total_demand[sorted_idx]
+
+# Plot with sorted data
+plot(
+    sorted_timestamps, 
+    sorted_fp, 
+    fillrange=0,
+    label="Fuel Production",
+    lw=0.5,
+    fillalpha=0.5,
+    c=:lightblue
 )
+plot!(
+    sorted_timestamps,
+    sorted_fp .+ sorted_sd,
+    fillrange=sorted_fp,
+    label="Discharge",
+    lw=0.5,
+    fillalpha=0.5,
+    c=:khaki
+)
+plot!(
+    sorted_timestamps,
+    sorted_fp .+ sorted_sd .+ sorted_pp,
+    fillrange=sorted_fp .+ sorted_sd,
+    label="Purchased",
+    lw=0.5,
+    fillalpha=0.5,
+    c=:darkseagreen
+)
+plot!(
+    sorted_timestamps,
+    sorted_total_demand,
+    label="Total Demand",
+    lw=2,
+    linecolor=:black
+)
+
+
+
+using Plots
+using StatsBase  # For smoothing
+gr()  # Set GR as backend
+
+# -- 1. Sort Timestamps and data --
+sorted_idx = sortperm(Timestamps)
+
+ts_sorted = Timestamps[sorted_idx]
+fp_sorted = fuel_production[sorted_idx]
+sd_sorted = storage_discharge[sorted_idx]
+pp_sorted = purchased[sorted_idx]
+demand_sorted = total_demand[sorted_idx]
+
+# Optional: smooth total demand (removes jagged noise)
+window = 5  # must be odd
+halfwin = div(window, 2)
+n = length(demand_sorted)
+
+demand_smooth = [ mean(demand_sorted[max(1, i - halfwin):min(n, i + halfwin)]) for i in 1:n ]
+
+# -- 2. Prepare cumulative layers for fillrange stacking --
+s1 = fp_sorted
+s2 = s1 .+ sd_sorted
+s3 = s2 .+ pp_sorted
+
+# -- 3. Plot stacked area chart --
+p = plot(
+    ts_sorted, s1,
+    fillrange=0,
+    label="Fuel Production",
+    lw=0.5,
+    fillalpha=0.4,
+    color=:skyblue,
+    xlabel="Time",
+    ylabel="Power (MW)",
+    title="Supply and Demand (Stacked)",
+    legend=:topright,
+    legend_background_color=:white,
+    size=(1000, 400),
+    grid=true,
+    xrotation=30,
+)
+
+plot!(
+    ts_sorted, s2,
+    fillrange=s1,
+    label="Discharge",
+    lw=0.5,
+    fillalpha=0.4,
+    color=:gold,
+)
+
+plot!(
+    ts_sorted, s3,
+    fillrange=s2,
+    label="Purchased",
+    lw=0.5,
+    fillalpha=0.4,
+    color=:seagreen,
+)
+
+# -- 4. Overlay smoothed demand line --
+plot!(
+    ts_sorted, demand_smooth,
+    label="Total Demand",
+    lw=2,
+    color=:black,
+)
+
+# -- 5. Save (optional) --
+# savefig(p, "supply_demand_plot.pdf")
+# savefig(p, "supply_demand_plot.png")
+
+display(p)
