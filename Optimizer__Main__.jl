@@ -15,12 +15,18 @@ rename!(df_da_preis, Symbol("Sequence Sequence 1") => :Seq1, Symbol("Sequence Se
 DayAheadPrices_Seq1 = Dict(row.timestamps => parse(Float64, row.Seq1) for row in eachrow(df_da_preis))
 DayAheadPrices_Seq2 = Dict(row.timestamps => parse(Float64, row.Seq2) for row in eachrow(df_da_preis))
 
-### Object Funciton
-m = Model(HiGHS.Optimizer)
+rename!(df_ida_preis, Symbol("ID AEP in €/MWh") => :IDA_Price)
+IntradayPrices = Dict(
+    row.timestamps => parse(Float64, replace(String(row.IDA_Price), "," => "."))
+    for row in eachrow(df_ida_preis)
+)
+
 
 # === parameters ===
 # Extract keys and values into vectors
+sort(LoadProfile)
 Timestamps = collect(keys(Solar_CF))
+
 technologies = ["SolarPV"]
 storages = ["Battery"]
 fuels = ["Power"]
@@ -29,7 +35,7 @@ fuels = ["Power"]
 MaxCapacity = Dict("SolarPV" => 3000, "Battery" => 5000)
 
 η_charge = 0.95  # Efficiency of charging
-η_discharge = 0.95  # Efficiency of discharging
+η_discharge = 0.9  # Efficiency of discharging
 
 
 ### building the model ###
@@ -37,318 +43,249 @@ MaxCapacity = Dict("SolarPV" => 3000, "Battery" => 5000)
 m = Model(HiGHS.Optimizer)
 
 # PV Data
-@variable(m, TotalCost[technologies] >= 0)
-@variable(m, FuelProductionByTechnology[technologies, fuels, Timestamps] >= 0)
-@variable(m, NewCapacity[technologies] >=0)
-@variable(m, AccumulatedCapacity[technologies] >=0)
-@variable(m, FuelUseByTechnology[technologies, fuels,Timestamps] >=0)
-@variable(m, Curtailment[fuels,Timestamps] >=0)
-@variable(m, TotalPVCost[technologies] >= 0)
+@variable(m, TotalCostSolarPV>= 0)
+@variable(m, SolarPVProduction[Timestamps] >= 0)
+@variable(m, NewSolarCapacity>=0)
+@variable(m, AccumulatedSolarCapacity >=0)
+@variable(m, Curtailment[Timestamps] >=0)
+@variable(m, TotalPVCost >= 0)
 
 ### And we also need to add our new variables for storages
-@variable(m, NewStorageEnergyCapacity[s=storages,f=fuels; StorageDischargeEfficiency[s,f]>0]>=0)
-@variable(m, AccumulatedStorageEnergyCapacity[s=storages,f=fuels,Timestamps; StorageDischargeEfficiency[s,f]>0]>=0)
-@variable(m, StorageCharge[s=storages, f=fuels,Timestamps; StorageDischargeEfficiency[s,f]>0]>=0)
-@variable(m, StorageDischarge[s=storages, f=fuels,Timestamps; StorageDischargeEfficiency[s,f]>0]>=0)
-@variable(m, StorageLevel[s=storages, f=fuels,Timestamps; StorageDischargeEfficiency[s,f]>0]>=0)
-@variable(m, TotalStorageCost[storages] >= 0)
+@variable(m, NewStorageEnergyCapacity>=0)
+@variable(m, AccumulatedStorageEnergyCapacity>=0)
+@variable(m, StorageCharge[Timestamps]>=0)
+@variable(m, StorageDischarge[Timestamps]>=0)
+@variable(m, StorageLevel[Timestamps]>=0)
+@variable(m, TotalStorageCost >= 0)
 
 # Add Market variables
-@variable(m, Purchased[Timestamps] >= 0)
-@variable(m, PurchasedIDA[fuels, Timestamps] >= 0)
+@variable(m, PowerPurchased[Timestamps] >= 0)
+@variable(m, PurchasedIDA[Timestamps] >= 0)
+
 @variable(m, PurchasedDayAhead[fuels, Timestamps] >= 0)
 @variable(m, PurchasedDayAhead_Seq1[Timestamps] >= 0)
 @variable(m, PurchasedDayAhead_Seq2[Timestamps] >= 0)
 @variable(m, PurchasingCost[Timestamps] >= 0)
-@variable(m, TotalPowerSold[Timestamps] >= 0)
+@variable(m, PowerSold[Timestamps] >= 0)
 
 # Selling Variables
+# Day-Ahead Market 
 @variable(m, SellingDayAhead_Seq1[Timestamps] >= 0)
 @variable(m, SellingDayAhead_Seq2[Timestamps] >= 0)
-@variable(m, ProfitDayAhead[Timestamps] >= 0)
+@variable(m, RevenueDayAhead[Timestamps] >= 0)
 
-# ================================ #
-### Implement Objective Function ###
-# ================================ #
+# Intra-Day Market
+@variable(m, SellingIntraDay[Timestamps] >= 0)
+@variable(m, RevenueIntraDay[Timestamps] >= 0)
+
+# ======================== #
+### Netzentgelte und Stromsteuer ###
+Netzentgelte_EUR_kWh = 0.15 # Netzentgelte in EUR/kWh
+StromSteuer_EUR_kWh = 0.02 # Stromsteuer in EUR/kWh
+Marge_EUR_kWh = 0.02 # Marge in EUR/kWh
+
 # ================================ #
 ### Implement Objective Function ###
 # ================================ #
 @objective(m, Max, 
-    sum(ProfitDayAhead[τ] for τ in Timestamps)  # Profits from Trading
-    - sum(TotalPVCost[t] for t in technologies) + 
-    - sum(TotalStorageCost[s] for s in storages)
+#   sum(RevenueDayAhead[τ] for τ in Timestamps)  # Profits from Trading Day Ahead
+#  + sum(RevenueIntraDay[τ] for τ in Timestamps)  # Profits from Intra-Day Trading
+    - TotalPVCost
+    - TotalStorageCost
     - sum(PurchasingCost[τ] for τ in Timestamps)
 )
 
-### Cost accounting
-# PV Cost Function
-@constraint(m, ProductionCostFunction[t in technologies,τ in Timestamps],
-    sum(FuelProductionByTechnology[t,f,τ] for f in fuels) * VariableCost[2020,t] * 1000 + InvestmentCost[2020,t]/ 15 * NewCapacity[t] == TotalPVCost[t] # Ignoring investment Cost for now
+### Profit and Loss Accounting
+### Investment Kosten in EUR/KWh
+@constraint(m, ProductionCostFunction,
+    sum(SolarPVProduction[τ] * 0.01/4 for τ in Timestamps) + 750/5  * 120/8760 * NewSolarCapacity == TotalPVCost
 )
 
-# Battery Cost, 300 EUR per kWh with 15 years of lifetime
-@constraint(m, StorageCostFunction[s in storages], 
-    TotalStorageCost[s] == sum(NewStorageEnergyCapacity[s,f] * 300/15 for f in fuels if StorageDischargeEfficiency[(s,f)]>0)
-)
+# Battery Cost, 250 EUR per kWh with 15 years of lifetime
+@constraint(m, StorageCostFunction, 
+    TotalStorageCost == NewStorageEnergyCapacity * 250/5 * 120/8760)
 
 # Day-Ahead Market Cost Function
+# Einnahmen in EUR/KWh
 @constraint(m, PurchasingCostFunction[τ in Timestamps],
-    PurchasingCost[τ] == PurchasedDayAhead_Seq1[τ] * DayAheadPrices_Seq1[τ] + 
-                        PurchasedDayAhead_Seq2[τ] * DayAheadPrices_Seq2[τ]
+    PurchasingCost[τ] == PurchasedDayAhead_Seq1[τ] * DayAheadPrices_Seq1[τ] / 1000 + 
+                        PurchasedDayAhead_Seq2[τ] * DayAheadPrices_Seq2[τ] / 1000
+                        + (PurchasedDayAhead_Seq1[τ] + PurchasedDayAhead_Seq2[τ]) 
+                        * (Netzentgelte_EUR_kWh + StromSteuer_EUR_kWh + Marge_EUR_kWh)
 )
 
-# Day-Ahead Market Cost Function
+# Day-Ahead Revenue Function
 @constraint(m, SalesFunction[τ in Timestamps],
-    ProfitDayAhead[τ] == SellingDayAhead_Seq1[τ] * DayAheadPrices_Seq1[τ] / 1000 # Converting EUR/MWh to EUR/kWh
+    RevenueDayAhead[τ] == SellingDayAhead_Seq1[τ] * DayAheadPrices_Seq1[τ] / 1000 # Converting EUR/MWh to EUR/kWh
                         + SellingDayAhead_Seq2[τ] * DayAheadPrices_Seq2[τ] / 1000 # Converting EUR/MWh to EUR/kWh
 )
-
-# Sum Quantities Sold:
-@constraint(m, TotalQuantitiesSold[τ in Timestamps],
-    TotalPowerSold[τ]== SellingDayAhead_Seq1[τ] + SellingDayAhead_Seq2[τ])
+# Intraday Market Revenue Function
+@constraint(m, SalesFunctionIntraDay[τ in Timestamps],
+    RevenueIntraDay[τ] ==
+        SellingIntraDay[τ] * IntradayPrices[τ] / 1000  # Converting EUR/MWh to EUR/kWh
+)
 
 
 # ================================ #
 ### Technical Constraints        ###
 # ================================ #
 @constraint(m, PurchasingFunction[τ in Timestamps],
-    Purchased[τ] == PurchasedDayAhead_Seq1[τ] + PurchasedDayAhead_Seq1[τ]
+    PowerPurchased[τ] == PurchasedDayAhead_Seq1[τ] + PurchasedDayAhead_Seq2[τ]
+)
+
+@constraint(m, SellingFunction[τ in Timestamps],
+    PowerSold[τ] == SellingIntraDay[τ] + SellingDayAhead_Seq1[τ] + SellingDayAhead_Seq2[τ]
 )
 
 ### Energy Balance Constraints ###
-@constraint(m, EnergyBalanceFunction[f in fuels, τ in Timestamps],
-    sum(FuelProductionByTechnology[t,f,τ] for t in technologies) + StorageDischarge["Battery",f,τ]  + Purchased[τ]     # Production
-    == StorageCharge["Battery",f,τ] + LoadProfile[f,τ] + Curtailment[f,τ] # Demand
-    +  SellingDayAhead_Seq1[τ] + SellingDayAhead_Seq2[τ]                   # IDA
+@constraint(m, EnergyBalanceFunction[τ in Timestamps],
+    SolarPVProduction[τ]  
+    + StorageDischarge[τ]
+    + PowerPurchased[τ]
+    ==
+    StorageCharge[τ]
+    + LoadProfile[τ]
+    + Curtailment[τ]
+    + PowerSold[τ]
 )
 
-@constraint(m, MaxSales[τ in Timestamps],
-    SellingDayAhead_Seq1[τ] + SellingDayAhead_Seq2[τ] <=
-    sum(FuelProductionByTechnology[t,f,τ] for t in technologies, f in fuels) +
-    sum(StorageDischarge[s,f,τ] for s in storages, f in fuels)
+@constraint(m, CurtailmentLimit[τ in Timestamps],
+    Curtailment[τ] <= SolarPVProduction[τ]
 )
 
-### Implement PV Constraints ###
+# ================================ #
+### Solar PV Constraints        ###
+# ================================ #
 # for variable renewables, the production needs to be always at maximum
-@constraint(m, ProductionFunction_res[t in technologies, f in fuels,τ in Timestamps;TagDispatchableTechnology[t]==0],
-    OutputRatio[t,f] * AccumulatedCapacity[t] * Solar_CF[τ] == FuelProductionByTechnology[t,f,τ]
-)
-
-# define the use by the production
-@constraint(m, UseFunction[t in technologies, f in fuels, τ in Timestamps],
-    InputRatio[t,f] * sum(FuelProductionByTechnology[t,ff, τ] for ff in fuels) == FuelUseByTechnology[t,f, τ]
+@constraint(m, ProductionFunction_res[τ in Timestamps],
+    AccumulatedSolarCapacity * Solar_CF[τ] ==  SolarPVProduction[τ]
 )
 
 # installed capacity is limited by the maximum capacity
-@constraint(m, MaxCapacityFunction[t in technologies, τ in Timestamps],
-     AccumulatedCapacity[t] <= MaxCapacity[t]
+@constraint(m, MaxCapacityFunction[τ in Timestamps],
+     AccumulatedSolarCapacity <= 5000 # Maximum capacity 5 MW
 )
 
-### Implement Battery Constraints ###
-@constraint(m, StorageChargeFunction[s in storages, f in fuels, τ in Timestamps; StorageDischargeEfficiency[s,f]>0], 
-    StorageCharge[s,f,τ] <= AccumulatedStorageEnergyCapacity[s,f,τ]/E2PRatio[s]
-)
-
-@constraint(m, StorageDischargeFunction[s in storages, f in fuels, τ in Timestamps; StorageDischargeEfficiency[s,f]>0], 
-    StorageDischarge[s,f,τ] <= AccumulatedStorageEnergyCapacity[s,f,τ]/E2PRatio[s]
-)
-
-for s in storages, f in fuels
-    if StorageDischargeEfficiency[s, f] > 0
-        for t = 2:length(Timestamps)  # skip first timestep
-            τ = Timestamps[t]
-            τ_prev = Timestamps[t-1]
-            @constraint(m, 
-                StorageLevel[s,f,τ] == 
-                StorageLevel[s,f,τ_prev] * StorageLosses[s,f] + 
-                StorageCharge[s,f,τ] * StorageChargeEfficiency[s,f] - 
-                StorageDischarge[s,f,τ] / StorageDischargeEfficiency[s,f]
-            )
-        end
-    end
-end
-
-@constraint(m, StorageLevelStartFunction[s in storages, f in fuels, τ in Timestamps; τ==Timestamps[1] && StorageDischargeEfficiency[s,f]>0], 
-    StorageLevel[s,f,τ] == 0.5*AccumulatedStorageEnergyCapacity[s,f,τ]*StorageLosses[s,f] + StorageCharge[s,f,τ]*StorageChargeEfficiency[s,f] - StorageDischarge[s,f,τ]/StorageDischargeEfficiency[s,f]
-)
-
-@constraint(m, MaxStorageLevelFunction[s in storages, f in fuels, τ in Timestamps; StorageDischargeEfficiency[s,f]>0], 
-    StorageLevel[s,f,τ] <= AccumulatedStorageEnergyCapacity[s,f,τ]
-)
-
-########### Total Installed capacity 
 # calculate the total installed capacity in each year
-@constraint(m, CapacityAccountingFunction[t in technologies],
-    NewCapacity[t] == AccumulatedCapacity[t])
+@constraint(m, CapacityAccountingFunction[τ in Timestamps],
+    NewSolarCapacity .== AccumulatedSolarCapacity)
+
+# ================================ #
+### Battery Constraints        ###
+# ================================ #
+@constraint(m, StorageChargeFunction[τ in Timestamps], 
+    StorageCharge[τ] <= AccumulatedStorageEnergyCapacity/( 4 * 4) # 4 hours of storage at 15 min intervals
+)
+
+@constraint(m, StorageDischargeFunction[τ in Timestamps], 
+    StorageDischarge[τ] <= AccumulatedStorageEnergyCapacity/(4 * 4) # 4 hours of storage at 15 min intervals
+)
+
+@constraint(m, StorageLevelUpdate[t in 2:length(Timestamps)], 
+    StorageLevel[Timestamps[t]] ==
+        StorageLevel[Timestamps[t - 1]] * StorageLosses["Battery", "Power"] +
+        StorageCharge[Timestamps[t]] * η_charge -
+        StorageDischarge[Timestamps[t]] / η_discharge
+)
+
+
+@constraint(m, StorageLevelStartFunction[τ in Timestamps; τ==Timestamps[1]], 
+    StorageLevel[τ] == 0.3*AccumulatedStorageEnergyCapacity*StorageLosses["Battery","Power"]/4 + η_charge - StorageDischarge[τ]/ η_discharge
+)
+
+@constraint(m, MaxStorageLevelFunction[τ in Timestamps], 
+    StorageLevel[τ] <= AccumulatedStorageEnergyCapacity
+)
 
 # account for currently installed storage capacities
-@constraint(m, StorageCapacityAccountingFunction[s in storages, f in fuels, τ in Timestamps; StorageDischargeEfficiency[s,f]>0],
-    NewStorageEnergyCapacity[s,f] == AccumulatedStorageEnergyCapacity[s,f,τ]
+@constraint(m, StorageCapacityAccountingFunction[τ in Timestamps],
+    NewStorageEnergyCapacity .== AccumulatedStorageEnergyCapacity
 )
 
-
+# installed capacity is limited by the maximum capacity
+@constraint(m, MaxCapacityStorageFunction[τ in Timestamps],
+     AccumulatedStorageEnergyCapacity <= 5000 # Maximum capacity 5 MW
+)
 
 # this starts the optimization
 # the assigned solver (here HiGHS) will takes care of the solution algorithm
 optimize!(m)
 termination_status(m)
 
-f = "Power"
-t = "SolarPV"
-s = "Battery"
 
+value.(AccumulatedStorageEnergyCapacity)
+value.(AccumulatedSolarCapacity)
+# ================================ #
+# --------------------
+# Zeitachse
+ts = collect(Timestamps)
 
-### Plotting
-# Get time series data
-fuel_production   = [value(FuelProductionByTechnology[t,f,τ]) for τ in Timestamps]
-storage_discharge = [value(StorageDischarge[s,f,τ]) for τ in Timestamps]
-purchased         = [value(Purchased[τ]) for τ in Timestamps]
-
-# Calculate total demand
-fuel_use       = [value(FuelUseByTechnology[t,f,τ]) for τ in Timestamps]  # Optional
-storage_charge = [value(StorageCharge[s,f,τ]) for τ in Timestamps]
-load           = [LoadProfile[(f,τ)] for τ in Timestamps]
-total_demand   = storage_charge .+ load  # You can also include fuel_use if relevant
-
-import Pkg
-Pkg.add("StatsPlots")  # Only once
-plotlyjs()  # switch backend to PlotlyJS
-using StatsPlots
-plotlyjs()  # or pyplot()
-
-# --- your time series data ---
-# fuel_production, storage_discharge, purchased = vectors of length Timestamps
-# total_demand = load + storage_charge
-
-supply_sources = hcat(fuel_production, storage_discharge, purchased)  # shape: T × 3
-
+# --------------------
+# Erzeuge den Plot
+# --------------------
 using Plots
-gr()
+using Dates
+using Statistics
 
-# Construct manual stacked areas:
-s1 = fuel_production
-s2 = s1 .+ storage_discharge
-s3 = s2 .+ purchased
+# Zeitachse
+ts = collect(Timestamps)
+ts_str = Dates.format.(ts, dateformat"yyyy-mm-dd HH:MM")
 
-# Create a sorted index 
-sorted_idx = sortperm(Timestamps)
+# Modell-Ergebnisse
+SolarPVProductionDf         = [value(SolarPVProduction[τ]) for τ in ts]
+CurtailmentDf            = [value(Curtailment[τ]) for τ in ts]
+PowerPurchasedDF       = [value(PowerPurchased[τ]) for τ in ts]
+Storage_DischargeDF = [value(StorageDischarge[τ]) for τ in ts]
 
-# Sort all time series by the same index
-sorted_timestamps      = Timestamps[sorted_idx]
-sorted_fp              = fuel_production[sorted_idx]
-sorted_sd              = storage_discharge[sorted_idx]
-sorted_pp              = purchased[sorted_idx]
-sorted_total_demand    = total_demand[sorted_idx]
+Load_DF   = [value(LoadProfile[τ]) for τ in ts]
+Storage_ChargeDF   = [value(StorageCharge[τ]) for τ in ts]
+price_da         = [DayAheadPrices_Seq1[τ] for τ in ts]
+price_id         = [IntradayPrices[τ] for τ in ts]
 
-# Plot with sorted data
-plot(
-    sorted_timestamps, 
-    sorted_fp, 
-    fillrange=0,
-    label="Fuel Production",
-    lw=0.5,
-    fillalpha=0.5,
-    c=:lightblue
-)
-plot!(
-    sorted_timestamps,
-    sorted_fp .+ sorted_sd,
-    fillrange=sorted_fp,
-    label="Discharge",
-    lw=0.5,
-    fillalpha=0.5,
-    c=:khaki
-)
-plot!(
-    sorted_timestamps,
-    sorted_fp .+ sorted_sd .+ sorted_pp,
-    fillrange=sorted_fp .+ sorted_sd,
-    label="Purchased",
-    lw=0.5,
-    fillalpha=0.5,
-    c=:darkseagreen
-)
-plot!(
-    sorted_timestamps,
-    sorted_total_demand,
-    label="Total Demand",
-    lw=2,
-    linecolor=:black
-)
+# Basisplot mit Erzeugung
+# Preise skalieren
+skalierungsfaktor = 1
+preis_da_scaled = price_da .* skalierungsfaktor
+preis_id_scaled = price_id .* skalierungsfaktor
 
+SolarPVProductionDf = SolarPVProductionDf - CurtailmentDf
 
-
-using Plots
-using StatsBase  # For smoothing
-gr()  # Set GR as backend
-
-# -- 1. Sort Timestamps and data --
-sorted_idx = sortperm(Timestamps)
-
-ts_sorted = Timestamps[sorted_idx]
-fp_sorted = fuel_production[sorted_idx]
-sd_sorted = storage_discharge[sorted_idx]
-pp_sorted = purchased[sorted_idx]
-demand_sorted = total_demand[sorted_idx]
-
-# Optional: smooth total demand (removes jagged noise)
-window = 5  # must be odd
-halfwin = div(window, 2)
-n = length(demand_sorted)
-
-demand_smooth = [ mean(demand_sorted[max(1, i - halfwin):min(n, i + halfwin)]) for i in 1:n ]
-
-# -- 2. Prepare cumulative layers for fillrange stacking --
-s1 = fp_sorted
-s2 = s1 .+ sd_sorted
-s3 = s2 .+ pp_sorted
-
-# -- 3. Plot stacked area chart --
 p = plot(
-    ts_sorted, s1,
+    ts_str,
+    SolarPVProductionDf,
     fillrange=0,
-    label="Fuel Production",
-    lw=0.5,
     fillalpha=0.4,
-    color=:skyblue,
-    xlabel="Time",
-    ylabel="Power (MW)",
-    title="Supply and Demand (Stacked)",
+    label="Solar PV",
+    color=:green,
+    linewidth=0,
+    xlabel="Zeit",
+    ylabel="Leistung [kW]",
     legend=:topright,
-    legend_background_color=:white,
-    size=(1000, 400),
-    grid=true,
-    xrotation=30,
+    title="Deckung des Verbrauchs"
 )
 
-plot!(
-    ts_sorted, s2,
-    fillrange=s1,
-    label="Discharge",
-    lw=0.5,
-    fillalpha=0.4,
-    color=:gold,
+# Netzbezug
+plot!(ts_str, SolarPVProductionDf .+ PowerPurchasedDF, fillrange=SolarPVProductionDf,
+      fillalpha=0.3, label="Netzbezug", color=:grey, linewidth=0.5)
+
+# Add Speicher Entladung stacked on top of Solar PV
+plot!(ts_str, SolarPVProductionDf .+ Storage_DischargeDF, fillrange=SolarPVProductionDf,
+    fillalpha=0.3, label="Speicher Entladung", color=:blue,linewidth=0
 )
 
-plot!(
-    ts_sorted, s3,
-    fillrange=s2,
-    label="Purchased",
-    lw=0.5,
-    fillalpha=0.4,
-    color=:seagreen,
-)
+# Verbrauch als Linie (dunkelgrau, gestrichelt)
+plot!(ts_str, load_DF, label="Verbrauch", color=:black, linewidth=1)
 
-# -- 4. Overlay smoothed demand line --
-plot!(
-    ts_sorted, demand_smooth,
-    label="Total Demand",
-    lw=2,
-    color=:black,
-)
+# Speicherladung unten (negative Nachfrage)
+plot!(ts_str, -1 .* Storage_ChargeDF, fillrange=0, fillalpha=0.3, label="Speicher Ladung", color=:red, linewidth=0)
 
-# -- 5. Save (optional) --
-# savefig(p, "supply_demand_plot.pdf")
-# savefig(p, "supply_demand_plot.png")
 
-display(p)
+
+# Börsenpreise als Linien
+plot!(ts_str, preis_da_scaled, label="Day-Ahead Preis (skaliert)", color=:black, linewidth=1.5)
+plot!(ts_str, preis_id_scaled, label="Intraday Preis (skaliert)", color=:orange, linewidth=1.5)
+
+# X-Achse mit Rotation, Tick-Reduktion
+xticks = 1:96:length(ts)
+plot!(xticks=xticks, xrotation=30)
+

@@ -69,7 +69,7 @@ sort!(df, :Zeit)
 
 
 # Build the dictionary with keys as (fuel, timestamp) tuples
-LoadProfile = Dict(("Power", row.Zeit) => row.Leistung for row in eachrow(df))
+LoadProfile = Dict((row.Zeit) => row.Leistung for row in eachrow(df))
 
 
 
