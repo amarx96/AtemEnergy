@@ -139,13 +139,13 @@ Marge_EUR_kWh = 0.02 # Marge in EUR/kWh
 
 ### Energy Balance Constraints ###
 @constraint(m, EnergyBalanceFunction[τ in Timestamps],
-    SolarPVProduction[τ]  
+ #   SolarPVProduction[τ]  
     + StorageDischarge[τ]
     + PowerPurchased[τ]
     ==
     StorageCharge[τ]
     + LoadProfile[τ]
-    + Curtailment[τ]
+ #   + Curtailment[τ]
     + PowerSold[τ]
 )
 
