@@ -60,10 +60,17 @@ println("Annualized battery CAPEX cost: €$(round(annualized_battery_cost, digi
 
 
 # And a Dict of maximum capacities in kW
-MaxCapacity = Dict("SolarPV" => 3000, "Battery" => 5000)
+MaxSolarCapacity = 5000 # in kW
+MaxBatteryCapacity = 5000  # in kWh
 
 # Maximum Netzanschluss leistung
 MaxGridConnection = 5000  # in kW
+
+# ======================== #
+### Netzentgelte und Stromsteuer ###
+Netzentgelte_EUR_kWh = 0.15 # Netzentgelte in EUR/kWh
+StromSteuer_EUR_kWh = 0.02 # Stromsteuer in EUR/kWh
+Marge_EUR_kWh = 0.02 # Marge in EUR/kWh
 
 
 ### building the model ###
@@ -106,12 +113,6 @@ m = Model(HiGHS.Optimizer)
 # Intra-Day Market
 @variable(m, SellingIntraDay[Timestamps] >= 0)
 @variable(m, RevenueIntraDay[Timestamps] >= 0)
-
-# ======================== #
-### Netzentgelte und Stromsteuer ###
-Netzentgelte_EUR_kWh = 0.15 # Netzentgelte in EUR/kWh
-StromSteuer_EUR_kWh = 0.02 # Stromsteuer in EUR/kWh
-Marge_EUR_kWh = 0.02 # Marge in EUR/kWh
 
 # ================================ #
 ### Implement Objective Function ###
@@ -399,7 +400,7 @@ TotalMarketPurchases = sum(value(PurchasingCost[τ]) for τ in Timestamps)
 
 
 
-Total_Fixed_Tariff_Cost = (1.36 + Netzentgelte_EUR_kWh + StromSteuer_EUR_kWh + Marge_EUR_kWh) * sum(LoadProfile[τ] for τ in Timestamps) * time_step # Netzentgelte in EUR/kWh
+Total_Fixed_Tariff_Cost = (0.4 + Netzentgelte_EUR_kWh + StromSteuer_EUR_kWh + Marge_EUR_kWh) * sum(LoadProfile[τ] for τ in Timestamps) * time_step # Netzentgelte in EUR/kWh
 Optimized_cost = TotalPV + TotalStorage + TotalMarketPurchases
 
 # 2. Create cost categories
@@ -428,7 +429,7 @@ bar(
     labels,
     costs,
     xlabel = "Tarifmodell",
-    ylabel = "Gesamtkosten [EUR/Jahr]",
+    ylabel = "Gesamtkosten [EUR/Monat]",
     legend = false,
     title = "Vergleich der jährlichen Stromkosten",
     size = (800, 500),
