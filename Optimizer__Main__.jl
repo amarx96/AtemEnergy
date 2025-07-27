@@ -55,7 +55,7 @@ annualized_solar_cost = solar_capex * annuity_factor(0.05, 20)   # in EUR/kWh/ye
 println("Annualized solar CAPEX cost: €$(round(annualized_solar_cost, digits=2))/kWh/year")
 
 # Calculate the annualized cost of battery storage
-annualized_battery_cost = batter_capex * annuity_factor(0.05, 15)  # in EUR/kWh/year
+annualized_battery_cost = battery_capex * annuity_factor(0.05, 15)  # in EUR/kWh/year
 println("Annualized battery CAPEX cost: €$(round(annualized_battery_cost, digits=2))/kWh/year")
 
 
@@ -178,13 +178,13 @@ m = Model(HiGHS.Optimizer)
 
 ### Energy Balance Constraints ###
 @constraint(m, EnergyBalanceFunction[τ in Timestamps],
-   SolarPVProduction[τ]  
+#   SolarPVProduction[τ]  
     + StorageDischarge[τ]
     + PowerPurchased[τ]
     ==
     StorageCharge[τ]
     + LoadProfile[τ]
-    + Curtailment[τ]
+#    + Curtailment[τ]
     + PowerSold[τ]
 )
 
@@ -258,12 +258,12 @@ termination_status(m)
 # ✅ Print model results
 using Printf
 
-println("Installierte PV-Kapazität [kW]: ", round(value(NewSolarCapacity), digits=2))
-println("Installierte Batterie-Kapazität [kWh]: ", round(value(NewStorageEnergyCapacity), digits=2))
+println("Installierte PV-Kapazität [kW]: ", round(value(NewSolarCapacity), digits=0))
+println("Installierte Batterie-Kapazität [kWh]: ", round(value(NewStorageEnergyCapacity), digits=0))
 
 # Sum charge/discharge energy in kWh (assuming time_step in hours, e.g. 0.25 for 15min)
-total_charge = sum(value(StorageCharge[τ]) * time_step for τ in Timestamps)
-total_discharge = sum(value(StorageDischarge[τ]) * time_step for τ in Timestamps)
+total_charge = round(sum(value(StorageCharge[τ]) * time_step for τ in Timestamps),digits=0)
+total_discharge = round(sum(value(StorageDischarge[τ]) * time_step for τ in Timestamps),digits=0)
 
 println("Gesamte Ladeenergie [kWh]: ", round(total_charge, digits=2))
 println("Gesamte Entladeenergie [kWh]: ", round(total_discharge, digits=2))
@@ -273,8 +273,8 @@ storage_capacity_series = [value(AccumulatedStorageEnergyCapacity) for τ in Tim
 solar_capacity_series = [value(AccumulatedSolarCapacity) for τ in Timestamps]
 
 # === Get the final (maximum) installed capacities ===
-final_storage_capacity = round(storage_capacity_series[end], digits=2)
-final_solar_capacity = round(solar_capacity_series[end], digits=2)
+final_storage_capacity = round(storage_capacity_series[end], digits=0)
+final_solar_capacity = round(solar_capacity_series[end], digits=0)
 
 println("Installierte PV-Kapazität [kW]: ", final_solar_capacity)
 println("Installierte Batterie-Kapazität [kWh]: ", final_storage_capacity)
