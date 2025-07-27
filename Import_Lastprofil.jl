@@ -57,13 +57,13 @@ end
 
 # Optional: Convert timestamp back to DateTime
 # 3. Plot the demand time series
-plot(df.Zeit, df.Leistung, xlabel="Zeit", ylabel="Last in MW", title="Lastprofil DX Center", lw=2)
+plot(df.Zeit, df.Leistung, xlabel="Zeit", ylabel="Last in kW", title="Lastprofil DX Center", lw=2)
 # Beispiel: Daten vom 28.02.2023 kopieren für den Schalttag
 tag_fuer_feb29 = Date(2024, 2, 28)
 df_feb28 = filter(row -> Date(row.Zeit) == tag_fuer_feb29, df)
 
 # An df_2024 anhängen und sortieren
-append!(df, df_feb29)
+append!(df, df_feb28)
 sort!(df, :Zeit)
 
 
